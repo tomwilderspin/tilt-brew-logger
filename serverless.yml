@@ -1,0 +1,47 @@
+service: tilt-brew-logger
+custom: 
+  bucketRef: 'brewLogger'
+  bucketName: 'brew-logger'
+  rawLogPrefix: 'raw-logs'
+provider:
+  name: aws
+  runtime: nodejs6.10
+  stage: v1
+  region: eu-west-1
+  iamRoleStatements:
+    - Effect: "Allow"
+      Action:
+        - "s3:*"
+      Resource:
+        Fn::Join:
+          - ""
+          - - "arn:aws:s3:::"
+            - "Ref" : ${self:custom:bucketRef}
+            - "/${self:custom:rawLogPrefix}"
+functions:
+  logEndpoint:
+    handler: logEndpoint/handler.run
+    events:
+      - http:
+          path: log
+          method: post
+          cors: true
+    environment:
+      S3_BUCKET_NAME: ${self:custom:bucketName}
+      S3_PATH_PREFIX: ${self:custom:rawLogPrefix}
+      FIXED_TOKEN: ${opt:token, test101}
+      AWS_REGION: ${self:region}
+resources:
+  Resources:
+    ${self:custom:bucketRef}:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:custom:bucketName}
+  Outputs:
+    rawLogBucketPath:
+      Description: "raw"
+      Value:
+        Fn:Join:
+          - ""
+          - - "Ref" : ${self:custom:bucketRef}
+            - "/${self:custom:rawLogPrefix}"
