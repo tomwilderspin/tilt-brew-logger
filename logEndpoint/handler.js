@@ -1,20 +1,26 @@
 'use strict'
 
 const AWS = require('aws-sdk')
-const Moment = require('moment') 
+const moment = require('moment') 
 AWS.config.update({region: process.env.AWS_REGION});
 const S3 = new AWS.S3();
 
 const S3_BUCKET_NAME = process.env.S3_BUCKET_NAME
-const S3_PREFIX_PATH = process.env.S3_PREFIX_PATH
+const S3_PATH_PREFIX = process.env.S3_PATH_PREFIX
 const FIXED_TOKEN = process.env.FIXED_TOKEN
 
 module.exports.run = (event, context, callback) => {
 
-  const inboundToken = event.headers.Authorization || '';
+  let inboundToken = ''
+
+  if (event.headers.Authorization) {
+    inboundToken = event.headers.Authorization
+  } else if(event.queryStringParameters.token) {
+    inboundToken = event.queryStringParameters.token
+  }
 
   if (inboundToken !== FIXED_TOKEN) {
-    console.log('unauthorized request token', event.headers, inboundToken, token);
+    console.log('unauthorized request token', event.headers, inboundToken, FIXED_TOKEN);
     return callback(null, {
       statusCode: 403,
       body: JSON.stringify({
@@ -23,7 +29,7 @@ module.exports.run = (event, context, callback) => {
     });
   }
 
-  const objectKey = `${S3_PREFIX_PATH}/${moment().format('YYYYMMDD')}`
+  const objectKey = `${S3_PATH_PREFIX}/${moment().format('YYYYMMDD')}`
 
   return writeLogToS3(event.body, objectKey, S3_BUCKET_NAME)
     .then(eTag => {
@@ -32,12 +38,12 @@ module.exports.run = (event, context, callback) => {
       return callback(null, {
         statusCode: 200,
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({message: 'data logged successfully', tag: eTag})
+        body: JSON.stringify({message: 'data logged successfully', tag: eTag.replace('"', '')})
       })
     })
     .catch(error => {
       console.error(error.message)
-      console.log(JSON.stringify(error))
+      console.log(error)
       return callback(null, {
         statusCode: 500,
         headers: {'Content-Type': 'application/json'},
@@ -56,7 +62,7 @@ function writeLogToS3 (logLine, objectKey, bucketName) {
               if (err.statusCode === 404) {
                   return resolve(false);
               }else {
-                  return reject(`fail to pull head from s3 ${err.message}`);
+                  return reject(`fail to pull head from s3 ${bucketName} :: ${objectKey} : ${err.toString()}`);
               }
           }
           return resolve(true);
@@ -64,7 +70,7 @@ function writeLogToS3 (logLine, objectKey, bucketName) {
   })
   .then(exists => {
     if (exists) {
-      return Promise((resolve, reject) => {
+      return new Promise((resolve, reject) => {
         return S3.getObject({Bucket: bucketName, Key: objectKey}, (err, data) => {
           if (err) {
             return reject(err);
@@ -76,11 +82,14 @@ function writeLogToS3 (logLine, objectKey, bucketName) {
     return Promise.resolve("");
   })
   .then(content => {
+    const count = content.length ?
+      `rowCount=${content.split(/\n/).length + 1}` : "rowCount=1"
+
     const putParams = {
-      Body: `${content}\n${logLine}`,
+      Body: content.length ? `${content}\n${logLine}` : logLine,
       Bucket: bucketName,
       Key: objectKey,
-      Tagging: `rowCount=${content.split(/\n/).length + 1}`
+      Tagging: count
     }
     return new Promise((resolve, reject) => {
       return S3.putObject(putParams, (err, data) => {
